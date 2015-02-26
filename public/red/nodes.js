@@ -343,13 +343,22 @@ RED.nodes = (function() {
                 }
             }
             if(exportCreds && n.credentials) {
+                var credentialSet = {};
                 node.credentials = {};
                 for (var cred in n._def.credentials) {
                     if (n._def.credentials.hasOwnProperty(cred)) {
-                        if (n.credentials[cred] != null) {
-                            node.credentials[cred] = n.credentials[cred];
+                        if (n._def.credentials[cred].type == 'password') {
+                            if (n.credentials["has_"+cred] != n.credentials._["has_"+cred] ||
+                                (n.credentials["has_"+cred] && n.credentials[cred])) {
+                                credentialSet[cred] = n.credentials[cred];
+                            }
+                        } else if (n.credentials[cred] != null && n.credentials[cred] != n.credentials._[cred]) {
+                            credentialSet[cred] = n.credentials[cred];
                         }
                     }
+                }
+                if (Object.keys(credentialSet).length > 0) {
+                    node.credentials = credentialSet;
                 }
             }
         }
@@ -385,7 +394,7 @@ RED.nodes = (function() {
             var wires = links.filter(function(d) { return d.source === p });
             for (var i=0;i<wires.length;i++) {
                 var w = wires[i];
-                if (w.target.id != p.id) {
+                if (w.target.type != "subflow") {
                     nIn.wires.push({id:w.target.id})
                 }
             }
@@ -558,6 +567,7 @@ RED.nodes = (function() {
             var new_subflows = [];
             var subflow_map = {};
             var nid;
+            var def;
             for (i=0;i<newNodes.length;i++) {
                 n = newNodes[i];
                 // TODO: remove workspace in next release+1
@@ -599,24 +609,8 @@ RED.nodes = (function() {
                     });
                     new_subflows.push(n);
                     addSubflow(n);
-                }
-            }
-            if (defaultWorkspace == null) {
-                defaultWorkspace = { type:"tab", id:getID(), label:"Sheet 1" };
-                addWorkspace(defaultWorkspace);
-                RED.view.addWorkspace(defaultWorkspace);
-                new_workspaces.push(defaultWorkspace);
-            }
-
-            var node_map = {};
-            var new_nodes = [];
-            var new_links = [];
-
-            for (i=0;i<newNodes.length;i++) {
-                n = newNodes[i];
-                // TODO: remove workspace in next release+1
-                if (n.type !== "workspace" && n.type !== "tab" && n.type !== "subflow") {
-                    var def = registry.getNodeType(n.type);
+                } else {
+                    def = registry.getNodeType(n.type);
                     if (def && def.category == "config") {
                         if (!RED.nodes.node(n.id)) {
                             var configNode = {id:n.id,type:n.type,users:[]};
@@ -629,7 +623,27 @@ RED.nodes = (function() {
                             configNode._def = def;
                             RED.nodes.add(configNode);
                         }
-                    } else {
+                    }
+                }
+            }
+            if (defaultWorkspace == null) {
+                defaultWorkspace = { type:"tab", id:getID(), label:"Sheet 1" };
+                addWorkspace(defaultWorkspace);
+                RED.view.addWorkspace(defaultWorkspace);
+                new_workspaces.push(defaultWorkspace);
+                activeWorkspace = RED.view.getWorkspace();
+            }
+
+            var node_map = {};
+            var new_nodes = [];
+            var new_links = [];
+
+            for (i=0;i<newNodes.length;i++) {
+                n = newNodes[i];
+                // TODO: remove workspace in next release+1
+                if (n.type !== "workspace" && n.type !== "tab" && n.type !== "subflow") {
+                    def = registry.getNodeType(n.type);
+                    if (!def || def.category != "config") {
                         var node = {x:n.x,y:n.y,z:n.z,type:0,wires:n.wires,changed:false};
                         if (createNewIds) {
                             if (subflow_map[node.z]) {

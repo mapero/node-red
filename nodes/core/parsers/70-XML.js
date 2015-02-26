@@ -22,6 +22,8 @@ module.exports = function(RED) {
 
     function XMLNode(n) {
         RED.nodes.createNode(this,n);
+        this.attrkey = n.attr || '$';
+        this.charkey = n.chr || '_';
         var node = this;
         this.on("input", function(msg) {
             if (msg.hasOwnProperty("payload")) {
@@ -30,7 +32,7 @@ module.exports = function(RED) {
                     node.send(msg);
                 }
                 else if (typeof msg.payload == "string") {
-                    parseString(msg.payload, {strict:true,async:true}, function (err, result) {
+                    parseString(msg.payload, {strict:true,async:true,attrkey:node.attrkey,charkey:node.charkey}, function (err, result) {
                         if (err) { node.error(err); }
                         else {
                             msg.payload = result;
@@ -38,7 +40,7 @@ module.exports = function(RED) {
                         }
                     });
                 }
-                else { node.log("This node only handles xml strings or js objects."); }
+                else { node.warn("This node only handles xml strings or js objects."); }
             }
         });
     }

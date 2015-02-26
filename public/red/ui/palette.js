@@ -17,12 +17,12 @@
 RED.palette = (function() {
 
     var exclusion = ['config','unknown','deprecated'];
-    var core = ['input', 'output', 'function', 'subflows', 'social', 'storage', 'analysis', 'advanced'];
+    var core = ['subflows', 'input', 'output', 'function', 'social', 'storage', 'analysis', 'advanced'];
 
     function createCategoryContainer(category){
         var escapedCategory = category.replace(" ","_");
-        $("#palette-container").append('<div class="palette-category">'+
-            '<div id="header-'+category+'" class="palette-header"><i class="expanded fa fa-caret-down"></i><span>'+category.replace("_"," ")+'</span></div>'+
+        var catDiv = $("#palette-container").append('<div id="palette-container-'+category+'" class="palette-category hide">'+
+            '<div id="palette-header-'+category+'" class="palette-header"><i class="expanded fa fa-caret-down"></i><span>'+category.replace("_"," ")+'</span></div>'+
             '<div class="palette-content" id="palette-base-category-'+category+'">'+
             '<div id="palette-'+category+'-input"></div>'+
             '<div id="palette-'+category+'-output"></div>'+
@@ -30,13 +30,11 @@ RED.palette = (function() {
             '</div>'+
             '</div>');
 
-        $("#header-"+category).on('click', function(e) {
+        $("#palette-header-"+category).on('click', function(e) {
             $(this).next().slideToggle();
             $(this).children("i").toggleClass("expanded");
         });
     }
-
-    core.forEach(createCategoryContainer);
 
     function setLabel(type, el,label) {
         var nodeWidth = 80;
@@ -45,12 +43,12 @@ RED.palette = (function() {
         var portHeight = 10;
 
         var words = label.split(" ");
-        
+
         var displayLines = [];
-        
+
         var currentLine = words[0];
         var currentLineWidth = RED.view.calculateTextWidth(currentLine, "palette_label", 0);
-        
+
         for (var i=1;i<words.length;i++) {
             var newWidth = RED.view.calculateTextWidth(currentLine+" "+words[i], "palette_label", 0);
             if (newWidth < nodeWidth) {
@@ -63,23 +61,27 @@ RED.palette = (function() {
             }
         }
         displayLines.push(currentLine);
-        
+
         var lines = displayLines.join("<br/>");
         var multiLineNodeHeight = 8+(lineHeight*displayLines.length);
         el.css({height:multiLineNodeHeight+"px"});
 
         var labelElement = el.find(".palette_label");
         labelElement.html(lines);
-        
+
         el.find(".palette_port").css({top:(multiLineNodeHeight/2-5)+"px"});
-        
+
         var popOverContent;
         try {
             var l = "<p><b>"+label+"</b></p>";
             if (label != type) {
                 l = "<p><b>"+label+"</b><br/><i>"+type+"</i></p>";
             }
-            popOverContent = $(l+($("script[data-help-name|='"+type+"']").html()||"<p>no information available</p>").trim()).slice(0,2);
+            
+            popOverContent = $(l+($("script[data-help-name|='"+type+"']").html()||"<p>no information available</p>").trim())
+                                .filter(function(n) {
+                                    return this.nodeType == 1 || (this.nodeType == 3 && this.textContent.trim().length > 0)
+                                }).slice(0,2);
         } catch(err) {
             // Malformed HTML may cause errors. TODO: need to understand what can break
             console.log("Error generating pop-over label for '"+type+"'.");
@@ -87,16 +89,16 @@ RED.palette = (function() {
             popOverContent = "<p><b>"+label+"</b></p><p>no information available</p>";
         }
 
-        
+
         el.data('popover').options.content = popOverContent;
     }
-    
+
     function escapeNodeType(nt) {
         return nt.replace(" ","_").replace(".","_").replace(":","_");
     }
-    
+
     function addNodeType(nt,def) {
-        
+
         var nodeTypeId = escapeNodeType(nt);
         if ($("#palette_node_"+nodeTypeId).length) {
             return;
@@ -120,7 +122,7 @@ RED.palette = (function() {
             }
 
             d.innerHTML = '<div class="palette_label"></div>';
-            
+
             d.className="palette_node";
             if (def.icon) {
                 d.style.backgroundImage = "url(icons/"+def.icon+")";
@@ -149,6 +151,7 @@ RED.palette = (function() {
             if ($("#palette-base-category-"+rootCategory).length === 0) {
                 createCategoryContainer(rootCategory);
             }
+            $("#palette-container-"+rootCategory).show();
 
             if ($("#palette-"+category).length === 0) {
                 $("#palette-base-category-"+rootCategory).append('<div id="palette-'+category+'"></div>');
@@ -175,7 +178,7 @@ RED.palette = (function() {
                 revert: true,
                 revertDuration: 50
             });
-            
+
             setLabel(nt,$(d),label);
         }
     }
@@ -193,13 +196,13 @@ RED.palette = (function() {
         var nodeTypeId = escapeNodeType(nt);
         $("#palette_node_"+nodeTypeId).show();
     }
-    
+
     function refreshNodeTypes() {
         RED.nodes.eachSubflow(function(sf) {
             var paletteNode = $("#palette_node_subflow_"+sf.id.replace(".","_"));
             var portInput = paletteNode.find(".palette_port_input");
             var portOutput = paletteNode.find(".palette_port_output");
-            
+
             if (portInput.length === 0 && sf.in.length > 0) {
                 var portIn = document.createElement("div");
                 portIn.className = "palette_port palette_port_input";
@@ -207,18 +210,18 @@ RED.palette = (function() {
             } else if (portInput.length !== 0 && sf.in.length === 0) {
                 portInput.remove();
             }
-            
+
             if (portOutput.length === 0 && sf.out.length > 0) {
                 var portOut = document.createElement("div");
                 portOut.className = "palette_port palette_port_output";
                 paletteNode.append(portOut);
             } else if (portOutput.length !== 0 && sf.out.length === 0) {
                 portOutput.remove();
-            } 
+            }
             setLabel(sf.type+":"+sf.id,paletteNode,sf.name);
         });
     }
-    
+
     function filterChange() {
         var val = $("#palette-search-input").val();
         if (val === "") {
@@ -227,7 +230,7 @@ RED.palette = (function() {
             $("#palette-search-clear").show();
         }
 
-        var re = new RegExp(val);
+        var re = new RegExp(val,'i');
         $(".palette_node").each(function(i,el) {
             if (val === "" || re.test(el.id)) {
                 $(this).show();
@@ -237,32 +240,42 @@ RED.palette = (function() {
         });
     }
 
-    $("#palette-search-input").focus(function(e) {
-        RED.keyboard.disable();
-    });
-    $("#palette-search-input").blur(function(e) {
-        RED.keyboard.enable();
-    });
-
-    $("#palette-search-clear").on("click",function(e) {
-        e.preventDefault();
-        $("#palette-search-input").val("");
-        filterChange();
-        $("#palette-search-input").focus();
-    });
-
-    $("#palette-search-input").val("");
-    $("#palette-search-input").on("keyup",function() {
-        filterChange();
-    });
-
-    $("#palette-search-input").on("focus",function() {
-        $("body").one("mousedown",function() {
-            $("#palette-search-input").blur();
+    function init() {
+        $(".palette-spinner").show();
+        if (RED.settings.paletteCategories) {
+            RED.settings.paletteCategories.forEach(createCategoryContainer);
+        } else {
+            core.forEach(createCategoryContainer);
+        }
+        
+        $("#palette-search-input").focus(function(e) {
+            RED.keyboard.disable();
         });
-    });
+        $("#palette-search-input").blur(function(e) {
+            RED.keyboard.enable();
+        });
+    
+        $("#palette-search-clear").on("click",function(e) {
+            e.preventDefault();
+            $("#palette-search-input").val("");
+            filterChange();
+            $("#palette-search-input").focus();
+        });
+    
+        $("#palette-search-input").val("");
+        $("#palette-search-input").on("keyup",function() {
+            filterChange();
+        });
+    
+        $("#palette-search-input").on("focus",function() {
+            $("body").one("mousedown",function() {
+                $("#palette-search-input").blur();
+            });
+        });
+    }
 
     return {
+        init: init,
         add:addNodeType,
         remove:removeNodeType,
         hide:hideNodeType,

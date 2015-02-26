@@ -42,9 +42,9 @@ module.exports = function(RED) {
         server.on('message', function (message, remote) {
             var msg;
             if (node.datatype =="base64") {
-                msg = { payload:message.toString('base64'), fromip:remote.address+':'+remote.port };
+                msg = { payload:message.toString('base64'), fromip:remote.address+':'+remote.port, ip:remote.address, port:remote.port };
             } else if (node.datatype =="utf8") {
-                msg = { payload:message.toString('utf8'), fromip:remote.address+':'+remote.port };
+                msg = { payload:message.toString('utf8'), fromip:remote.address+':'+remote.port, ip:remote.address, port:remote.port };
             } else {
                 msg = { payload:message, fromip:remote.address+':'+remote.port, ip:remote.address, port:remote.port };
             }
@@ -81,7 +81,9 @@ module.exports = function(RED) {
             }
         });
 
-        server.bind(node.port,node.iface);
+        // Hack for when you have both in and out udp nodes sharing a port
+        //   if udp in starts last it shares better - so give it a chance to be last
+        setTimeout( function() { server.bind(node.port,node.iface); }, 250);;
     }
     RED.nodes.registerType("udp in",UDPin);
 

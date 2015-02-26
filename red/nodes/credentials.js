@@ -1,5 +1,5 @@
 /**
- * Copyright 2014 IBM Corp.
+ * Copyright 2014, 2015 IBM Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,10 @@
  * limitations under the License.
  **/
 
-var util = require("util");
 var when = require("when");
+
+var log = require("../log");
+var needsPermission = require("../api/auth").needsPermission;
 
 var credentialCache = {};
 var storage = null;
@@ -26,7 +28,7 @@ var redApp = null;
  * Adds an HTTP endpoint to allow look up of credentials for a given node id.
  */
 function registerEndpoint(type) {
-    redApp.get('/credentials/' + type + '/:id', function (req, res) {
+    redApp.get('/credentials/' + type + '/:id', needsPermission(type+".read"), function (req, res) {
         // TODO: This could be a generic endpoint with the type value
         //       parameterised.
         //
@@ -75,7 +77,7 @@ module.exports = {
         return storage.getCredentials().then(function (creds) {
             credentialCache = creds;
         }).otherwise(function (err) {
-            util.log("[red] Error loading credentials : " + err);
+            log.warn("Error loading credentials : " + err);
         });
     },
     
@@ -111,15 +113,18 @@ module.exports = {
 
     /**
      * Deletes any credentials for nodes that no longer exist
-     * @param getNode a function that can return a node for a given id
+     * @param config a flow config
      * @return a promise for the saving of credentials to storage
      */
-    clean: function (getNode) {
+    clean: function (config) {
+        var existingIds = {};
+        config.forEach(function(n) {
+            existingIds[n.id] = true;     
+        });
         var deletedCredentials = false;
         for (var c in credentialCache) {
             if (credentialCache.hasOwnProperty(c)) {
-                var n = getNode(c);
-                if (!n) {
+                if (!existingIds[c]) {
                     deletedCredentials = true;
                     delete credentialCache[c];
                 }
@@ -164,9 +169,8 @@ module.exports = {
             
             var dashedType = nodeType.replace(/\s+/g, '-');
             var definition = credentialsDef[dashedType];
-            
             if (!definition) {
-                util.log('Credential Type ' + nodeType + ' is not registered.');
+                log.warn('Credential Type ' + nodeType + ' is not registered.');
                 return;
             }
             
@@ -186,6 +190,7 @@ module.exports = {
                 }
             }
             credentialCache[nodeID] = savedCredentials;
+            delete node.credentials;
         }
     },
     

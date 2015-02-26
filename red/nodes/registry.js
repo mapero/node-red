@@ -1,5 +1,5 @@
 /**
- * Copyright 2014 IBM Corp.
+ * Copyright 2014, 2015 IBM Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  **/
- 
+
 var util = require("util");
 var when = require("when");
 var whenNode = require('when/node');
 var fs = require("fs");
 var path = require("path");
-var crypto = require("crypto"); 
+var crypto = require("crypto");
 var UglifyJS = require("uglify-js");
 
 var events = require("../events");
@@ -33,7 +33,7 @@ function filterNodeInfo(n) {
         name: n.name,
         types: n.types,
         enabled: n.enabled
-    }
+    };
     if (n.hasOwnProperty("loaded")) {
         r.loaded = n.loaded;
     }
@@ -46,78 +46,142 @@ function filterNodeInfo(n) {
     return r;
 }
 
+function getModule(id) {
+    return id.split("/")[0];
+}
+
+function getNode(id) {
+    return id.split("/")[1];
+}
+
 var registry = (function() {
     var nodeConfigCache = null;
-    var nodeConfigs = {};
+    var moduleConfigs = {};
     var nodeList = [];
     var nodeConstructors = {};
     var nodeTypeToId = {};
-    var nodeModules = {};
-    
+    var moduleNodes = {};
+
     function saveNodeList() {
-        var nodeList = {};
-        
-        for (var i in nodeConfigs) {
-            if (nodeConfigs.hasOwnProperty(i)) {
-                var nodeConfig = nodeConfigs[i];
-                var n = filterNodeInfo(nodeConfig);
-                n.file = nodeConfig.file;
-                delete n.loaded;
-                delete n.err;
-                delete n.file;
-                delete n.id;
-                nodeList[i] = n;
+        var moduleList = {};
+
+        for (var module in moduleConfigs) {
+            if (moduleConfigs.hasOwnProperty(module)) {
+                if (!moduleList[module]) {
+                    moduleList[module] = {
+                        name: module,
+                        version: moduleConfigs[module].version,
+                        nodes: {}
+                    };
+                }
+                var nodes = moduleConfigs[module].nodes;
+                for(var node in nodes) {
+                    if (nodes.hasOwnProperty(node)) {
+                        var config = nodes[node];
+                        var n = filterNodeInfo(config);
+                        delete n.loaded;
+                        delete n.err;
+                        delete n.file;
+                        delete n.id;
+                        moduleList[module].nodes[node] = n;
+                    }
+                }
             }
         }
         if (settings.available()) {
-            return settings.set("nodes",nodeList);
+            return settings.set("nodes",moduleList);
         } else {
             return when.reject("Settings unavailable");
         }
     }
-    
+
+    function loadNodeConfigs() {
+        var configs = settings.get("nodes");
+
+        if (!configs) {
+            return {};
+        } else if (configs['node-red']) {
+            return configs;
+        } else {
+            // Migrate from the 0.9.1 format of settings
+            var newConfigs = {};
+            for (var id in configs) {
+                if (configs.hasOwnProperty(id)) {
+                    var nodeConfig = configs[id];
+                    var moduleName;
+                    var nodeSetName;
+
+                    if (nodeConfig.module) {
+                        moduleName = nodeConfig.module;
+                        nodeSetName = nodeConfig.name.split(":")[1];
+                    } else {
+                        moduleName = "node-red";
+                        nodeSetName = nodeConfig.name.replace(/^\d+-/,"").replace(/\.js$/,"");
+                    }
+
+                    if (!newConfigs[moduleName]) {
+                        newConfigs[moduleName] = {
+                            name: moduleName,
+                            nodes:{}
+                        };
+                    }
+                    newConfigs[moduleName].nodes[nodeSetName] = {
+                        name: nodeSetName,
+                        types: nodeConfig.types,
+                        enabled: nodeConfig.enabled,
+                        module: moduleName
+                    };
+                }
+            }
+            settings.set("nodes",newConfigs);
+            return newConfigs;
+        }
+    }
+
     return {
         init: function() {
             if (settings.available()) {
-                nodeConfigs = settings.get("nodes")||{};
-                // Restore the node id property to individual entries
-                for (var id in nodeConfigs) {
-                    if (nodeConfigs.hasOwnProperty(id)) {
-                        nodeConfigs[id].id = id;
-                    }
-                }
+                moduleConfigs = loadNodeConfigs();
             } else {
-                nodeConfigs = {};
+                moduleConfigs = {};
             }
-            nodeModules = {};
+            moduleNodes = {};
             nodeTypeToId = {};
             nodeConstructors = {};
             nodeList = [];
             nodeConfigCache = null;
         },
-        
-        addNodeSet: function(id,set) {
+        addNodeSet: function(id,set,version) {
             if (!set.err) {
                 set.types.forEach(function(t) {
                     nodeTypeToId[t] = id;
                 });
             }
-            
-            if (set.module) {
-                nodeModules[set.module] = nodeModules[set.module]||{nodes:[]};
-                nodeModules[set.module].nodes.push(id);
+
+            moduleNodes[set.module] = moduleNodes[set.module]||[];
+            moduleNodes[set.module].push(set.name);
+
+            if (!moduleConfigs[set.module]) {
+                moduleConfigs[set.module] = {
+                    name: set.module,
+                    nodes: {}
+                };
             }
-            
-            nodeConfigs[id] = set;
+
+            if (version) {
+                moduleConfigs[set.module].version = version;
+            }
+
+            moduleConfigs[set.module].nodes[set.name] = set;
             nodeList.push(id);
             nodeConfigCache = null;
         },
         removeNode: function(id) {
-            var config = nodeConfigs[id];
+            var config = moduleConfigs[getModule(id)].nodes[getNode(id)];
             if (!config) {
                 throw new Error("Unrecognised id: "+id);
             }
-            delete nodeConfigs[id];
+            delete moduleConfigs[getModule(id)].nodes[getNode(id)];
             var i = nodeList.indexOf(id);
             if (i > -1) {
                 nodeList.splice(i,1);
@@ -135,34 +199,84 @@ var registry = (function() {
             if (!settings.available()) {
                 throw new Error("Settings unavailable");
             }
-            var nodes = nodeModules[module];
+            var nodes = moduleNodes[module];
             if (!nodes) {
                 throw new Error("Unrecognised module: "+module);
             }
             var infoList = [];
-            for (var i=0;i<nodes.nodes.length;i++) {
-                infoList.push(registry.removeNode(nodes.nodes[i]));
+            for (var i=0;i<nodes.length;i++) {
+                infoList.push(registry.removeNode(module+"/"+nodes[i]));
             }
-            delete nodeModules[module];
+            delete moduleNodes[module];
             saveNodeList();
             return infoList;
         },
         getNodeInfo: function(typeOrId) {
+            var id = typeOrId;
             if (nodeTypeToId[typeOrId]) {
-                return filterNodeInfo(nodeConfigs[nodeTypeToId[typeOrId]]);
-            } else if (nodeConfigs[typeOrId]) {
-                return filterNodeInfo(nodeConfigs[typeOrId]);
+                id = nodeTypeToId[typeOrId];
+            }
+            if (id) {
+                var module = moduleConfigs[getModule(id)];
+                if (module) {
+                    var config = module.nodes[getNode(id)];
+                    if (config) {
+                        return filterNodeInfo(config);
+                    }
+                }
             }
             return null;
         },
         getNodeList: function() {
             var list = [];
-            for (var id in nodeConfigs) {
-                if (nodeConfigs.hasOwnProperty(id)) {
-                    list.push(filterNodeInfo(nodeConfigs[id]))
+            for (var module in moduleConfigs) {
+                if (moduleConfigs.hasOwnProperty(module)) {
+                    var nodes = moduleConfigs[module].nodes;
+                    for (var node in nodes) {
+                        if (nodes.hasOwnProperty(node)) {
+                            list.push(filterNodeInfo(nodes[node]));
+                        }
+                    }
                 }
             }
             return list;
+        },
+        getModuleList: function() {
+            var list = [];
+            for (var module in moduleNodes) {
+                if (moduleNodes.hasOwnProperty(module)) {
+                    var nodes = moduleNodes[module];
+                    var m = {
+                        name: module,
+                        version: moduleConfigs[module].version,
+                        nodes: []
+                    };
+                    for (var i = 0; i < nodes.length; ++i) {
+                        m.nodes.push(filterNodeInfo(moduleConfigs[module].nodes[nodes[i]]));
+                    }
+                    list.push(m);
+                }
+            }
+            return list;
+        },
+        getModuleInfo: function(module) {
+            if (moduleNodes[module]) {
+                var nodes = moduleNodes[module];
+                var m = {
+                    name: module,
+                    version: moduleConfigs[module].version,
+                    nodes: []
+                };
+                for (var i = 0; i < nodes.length; ++i) {
+                    m.nodes.push(filterNodeInfo(moduleConfigs[module].nodes[nodes[i]]));
+                }
+                return m;
+            } else {
+                return null;
+            }
+        },
+        getModuleVersion: function(module) {
+            return moduleConfigs[module].version;
         },
         registerNodeConstructor: function(type,constructor) {
             if (nodeConstructors[type]) {
@@ -175,8 +289,7 @@ var registry = (function() {
             nodeConstructors[type] = constructor;
             events.emit("type-registered",type);
         },
-        
-        
+
         /**
          * Gets all of the node template configs
          * @return all of the node templates in a single string
@@ -186,7 +299,8 @@ var registry = (function() {
                 var result = "";
                 var script = "";
                 for (var i=0;i<nodeList.length;i++) {
-                    var config = nodeConfigs[nodeList[i]];
+                    var id = nodeList[i];
+                    var config = moduleConfigs[getModule(id)].nodes[getNode(id)];
                     if (config.enabled && !config.err) {
                         result += config.config;
                         script += config.script;
@@ -201,9 +315,13 @@ var registry = (function() {
             }
             return nodeConfigCache;
         },
-        
+
         getNodeConfig: function(id) {
-            var config = nodeConfigs[id];
+            var config = moduleConfigs[getModule(id)];
+            if (!config) {
+                return null;
+            }
+            config = config.nodes[getNode(id)];
             if (config) {
                 var result = config.config;
                 if (config.script) {
@@ -214,37 +332,52 @@ var registry = (function() {
                 return null;
             }
         },
-        
+
         getNodeConstructor: function(type) {
-            var config = nodeConfigs[nodeTypeToId[type]];
+            var id = nodeTypeToId[type];
+
+            var config;
+            if (typeof id === "undefined") {
+                config = undefined;
+            } else {
+                config = moduleConfigs[getModule(id)].nodes[getNode(id)];
+            }
+
             if (!config || (config.enabled && !config.err)) {
                 return nodeConstructors[type];
             }
             return null;
         },
-        
+
         clear: function() {
             nodeConfigCache = null;
-            nodeConfigs = {};
+            moduleConfigs = {};
             nodeList = [];
             nodeConstructors = {};
             nodeTypeToId = {};
         },
-        
+
         getTypeId: function(type) {
             return nodeTypeToId[type];
         },
-        
-        getModuleInfo: function(type) {
-            return nodeModules[type];
+
+        getNodeModuleInfo: function(module) {
+            return moduleNodes[module];
         },
-        
-        enableNodeSet: function(id) {
+
+        enableNodeSet: function(typeOrId) {
             if (!settings.available()) {
                 throw new Error("Settings unavailable");
             }
-            var config = nodeConfigs[id];
-            if (config) {
+
+            var id = typeOrId;
+            if (nodeTypeToId[typeOrId]) {
+                id = nodeTypeToId[typeOrId];
+            }
+
+            var config;
+            try {
+                config = moduleConfigs[getModule(id)].nodes[getNode(id)];
                 delete config.err;
                 config.enabled = true;
                 if (!config.loaded) {
@@ -253,37 +386,60 @@ var registry = (function() {
                 }
                 nodeConfigCache = null;
                 saveNodeList();
-            } else {
-                throw new Error("Unrecognised id: "+id);
+            } catch (err) {
+                throw new Error("Unrecognised id: "+typeOrId);
             }
             return filterNodeInfo(config);
         },
-        
-        disableNodeSet: function(id) {
+
+        disableNodeSet: function(typeOrId) {
             if (!settings.available()) {
                 throw new Error("Settings unavailable");
             }
-            var config = nodeConfigs[id];
-            if (config) {
+            var id = typeOrId;
+            if (nodeTypeToId[typeOrId]) {
+                id = nodeTypeToId[typeOrId];
+            }
+            var config;
+            try {
+                config = moduleConfigs[getModule(id)].nodes[getNode(id)];
                 // TODO: persist setting
                 config.enabled = false;
                 nodeConfigCache = null;
                 saveNodeList();
-            } else {
+            } catch (err) {
                 throw new Error("Unrecognised id: "+id);
             }
             return filterNodeInfo(config);
         },
-        
+
         saveNodeList: saveNodeList,
-        
-        cleanNodeList: function() {
+
+        cleanModuleList: function() {
             var removed = false;
-            for (var id in nodeConfigs) {
-                if (nodeConfigs.hasOwnProperty(id)) {
-                    if (nodeConfigs[id].module && !nodeModules[nodeConfigs[id].module]) {
-                        registry.removeNode(id);
-                        removed = true;
+            for (var mod in moduleConfigs) {
+                if (moduleConfigs.hasOwnProperty(mod)) {
+                    var nodes = moduleConfigs[mod].nodes;
+                    var node;
+                    if (mod == "node-red") {
+                        // For core nodes, look for nodes that are enabled, !loaded and !errored
+                        for (node in nodes) {
+                            if (nodes.hasOwnProperty(node)) {
+                                var n = nodes[node];
+                                if (n.enabled && !n.err && !n.loaded) {
+                                    registry.removeNode(mod+"/"+node);
+                                    removed = true;
+                                }
+                            }
+                        }
+                    } else if (moduleConfigs[mod] && !moduleNodes[mod]) {
+                        // For node modules, look for missing ones
+                        for (node in nodes) {
+                            if (nodes.hasOwnProperty(node)) {
+                                registry.removeNode(mod+"/"+node);
+                                removed = true;
+                            }
+                        }
                     }
                 }
             }
@@ -291,7 +447,7 @@ var registry = (function() {
                 saveNodeList();
             }
         }
-    }
+    };
 })();
 
 
@@ -330,14 +486,14 @@ function getNodeFiles(dir) {
                         }
                     }
                 }
-                valid = valid && fs.existsSync(path.join(dir,fn.replace(/\.js$/,".html")))
-                
+                valid = valid && fs.existsSync(path.join(dir,fn.replace(/\.js$/,".html")));
+
                 if (valid) {
                     result.push(path.join(dir,fn));
                 }
             }
         } else if (stats.isDirectory()) {
-            // Ignore /.dirs/, /lib/ /node_modules/ 
+            // Ignore /.dirs/, /lib/ /node_modules/
             if (!/^(\..*|lib|icons|node_modules|test)$/.test(fn)) {
                 result = result.concat(getNodeFiles(path.join(dir,fn)));
             } else if (fn === "icons") {
@@ -348,6 +504,37 @@ function getNodeFiles(dir) {
     return result;
 }
 
+function scanDirForNodesModules(dir,moduleName) {
+    var results = [];
+    try {
+        var files = fs.readdirSync(dir);
+        for (var i=0;i<files.length;i++) {
+            var fn = files[i];
+            if (!registry.getNodeModuleInfo(fn)) {
+                if (!moduleName || fn == moduleName) {
+                    var pkgfn = path.join(dir,fn,"package.json");
+                    try {
+                        var pkg = require(pkgfn);
+                        if (pkg['node-red']) {
+                            var moduleDir = path.join(dir,fn);
+                            results.push({dir:moduleDir,package:pkg});
+                        }
+                    } catch(err) {
+                        if (err.code != "MODULE_NOT_FOUND") {
+                            // TODO: handle unexpected error
+                        }
+                    }
+                    if (fn == moduleName) {
+                        break;
+                    }
+                }
+            }
+        }
+    } catch(err) {
+    }
+    return results;
+}
+
 /**
  * Scans the node_modules path for nodes
  * @param moduleName the name of the module to be found
@@ -356,36 +543,19 @@ function getNodeFiles(dir) {
 function scanTreeForNodesModules(moduleName) {
     var dir = __dirname+"/../../nodes";
     var results = [];
+    var userDir;
+
+    if (settings.userDir) {
+        userDir = path.join(settings.userDir,"node_modules");
+        results = results.concat(scanDirForNodesModules(userDir,moduleName));
+    }
+    
     var up = path.resolve(path.join(dir,".."));
     while (up !== dir) {
         var pm = path.join(dir,"node_modules");
-        try {
-            var files = fs.readdirSync(pm);
-            for (var i=0;i<files.length;i++) {
-                var fn = files[i];
-                if (!registry.getModuleInfo(fn)) {
-                    if (!moduleName || fn == moduleName) {
-                        var pkgfn = path.join(pm,fn,"package.json");
-                        try {
-                            var pkg = require(pkgfn);
-                            if (pkg['node-red']) {
-                                var moduleDir = path.join(pm,fn);
-                                results.push({dir:moduleDir,package:pkg});
-                            }
-                        } catch(err) {
-                            if (err.code != "MODULE_NOT_FOUND") {
-                                // TODO: handle unexpected error
-                            }
-                        }
-                        if (fn == moduleName) {
-                            break;
-                        }
-                    }
-                }
-            }
-        } catch(err) {
+        if (pm != userDir) {
+            results = results.concat(scanDirForNodesModules(pm,moduleName));
         }
-        
         dir = up;
         up = path.resolve(path.join(dir,".."));
     }
@@ -405,7 +575,7 @@ function loadNodesFromModule(moduleDir,pkg) {
         if (nodes.hasOwnProperty(n)) {
             var file = path.join(moduleDir,nodes[n]);
             try {
-                results.push(loadNodeConfig(file,pkg.name,n));
+                results.push(loadNodeConfig(file,pkg.name,n,pkg.version));
             } catch(err) {
             }
             var iconDir = path.join(moduleDir,path.dirname(nodes[n]),"icons");
@@ -436,22 +606,10 @@ function loadNodesFromModule(moduleDir,pkg) {
  *            types: an array of node type names in this file
  *         }
  */
-function loadNodeConfig(file,module,name) {
-    var id = crypto.createHash('sha1').update(file).digest("hex");
-    if (module && name) {
-        var newid = crypto.createHash('sha1').update(module+":"+name).digest("hex");
-        var existingInfo = registry.getNodeInfo(id);
-        if (existingInfo) {
-            // For a brief period, id for modules were calculated incorrectly.
-            // To prevent false-duplicates, this removes the old id entry
-            registry.removeNode(id);
-            registry.saveNodeList();
-        }
-        id = newid;
-
-    }
+function loadNodeConfig(file,module,name,version) {
+    var id = module + "/" + name;
     var info = registry.getNodeInfo(id);
-    
+
     var isEnabled = true;
 
     if (info) {
@@ -460,38 +618,34 @@ function loadNodeConfig(file,module,name) {
         }
         isEnabled = info.enabled;
     }
-    
+
     var node = {
         id: id,
+        module: module,
+        name: name,
         file: file,
         template: file.replace(/\.js$/,".html"),
         enabled: isEnabled,
         loaded:false
-    }
-    
-    if (module) {
-        node.name = module+":"+name;
-        node.module = module;
-    } else {
-        node.name = path.basename(file)
-    }
+    };
+
     try {
         var content = fs.readFileSync(node.template,'utf8');
-        
+
         var types = [];
-        
+
         var regExp = /<script ([^>]*)data-template-name=['"]([^'"]*)['"]/gi;
         var match = null;
-        
+
         while((match = regExp.exec(content)) !== null) {
             types.push(match[2]);
         }
         node.types = types;
         node.config = content;
-        
+
         // TODO: parse out the javascript portion of the template
         node.script = "";
-        
+
         for (var i=0;i<node.types.length;i++) {
             if (registry.getTypeId(node.types[i])) {
                 node.err = node.types[i]+" already registered";
@@ -506,7 +660,8 @@ function loadNodeConfig(file,module,name) {
             node.err = err.toString();
         }
     }
-    registry.addNodeSet(id,node);
+
+    registry.addNodeSet(id,node,version);
     return node;
 }
 
@@ -520,14 +675,19 @@ function load(defaultNodesDir,disableNodePathScan) {
     return when.promise(function(resolve,reject) {
         // Find all of the nodes to load
         var nodeFiles;
+        var dir;
         if(defaultNodesDir) {
             nodeFiles = getNodeFiles(path.resolve(defaultNodesDir));
         } else {
             nodeFiles = getNodeFiles(__dirname+"/../../nodes");
         }
-        
+
+        if (settings.userDir) {
+            dir = path.join(settings.userDir,"nodes");
+            nodeFiles = nodeFiles.concat(getNodeFiles(dir));
+        }
         if (settings.nodesDir) {
-            var dir = settings.nodesDir;
+            dir = settings.nodesDir;
             if (typeof settings.nodesDir == "string") {
                 dir = [dir];
             }
@@ -538,12 +698,12 @@ function load(defaultNodesDir,disableNodePathScan) {
         var nodes = [];
         nodeFiles.forEach(function(file) {
             try {
-                nodes.push(loadNodeConfig(file));
+                nodes.push(loadNodeConfig(file,"node-red",path.basename(file).replace(/^\d+-/,"").replace(/\.js$/,""),settings.version));
             } catch(err) {
-                // 
+                //
             }
         });
-        
+
         // TODO: disabling npm module loading if defaultNodesDir set
         //       This indicates a test is being run - don't want to pick up
         //       unexpected nodes.
@@ -561,18 +721,18 @@ function load(defaultNodesDir,disableNodePathScan) {
                 promises.push(loadNodeModule(node));
             }
         });
-        
+
         //resolve([]);
         when.settle(promises).then(function(results) {
             // Trigger a load of the configs to get it precached
             registry.getAllNodeConfigs();
-            
+
             if (settings.available()) {
                 resolve(registry.saveNodeList());
             } else {
                 resolve();
             }
-        }); 
+        });
     });
 }
 
@@ -582,7 +742,7 @@ function load(defaultNodesDir,disableNodePathScan) {
  * @return a promise that resolves to an update node info object. The object
  *         has the following properties added:
  *            err: any error encountered whilst loading the node
- *            
+ *
  */
 function loadNodeModule(node) {
     var nodeDir = path.dirname(node.file);
@@ -627,7 +787,7 @@ function loadNodeList(nodes) {
             promises.push(node);
         }
     });
-    
+
     return when.settle(promises).then(function(results) {
         return registry.saveNodeList().then(function() {
             var list = results.map(function(r) {
@@ -643,8 +803,8 @@ function addNode(file) {
         throw new Error("Settings unavailable");
     }
     var nodes = [];
-    try { 
-        nodes.push(loadNodeConfig(file));
+    try {
+        nodes.push(loadNodeConfig(file,"node-red",path.basename(file).replace(/^\d+-/,"").replace(/\.js$/,""),settings.version));
     } catch(err) {
         return when.reject(err);
     }
@@ -656,7 +816,7 @@ function addModule(module) {
         throw new Error("Settings unavailable");
     }
     var nodes = [];
-    if (registry.getModuleInfo(module)) {
+    if (registry.getNodeModuleInfo(module)) {
         return when.reject(new Error("Module already loaded"));
     }
     var moduleFiles = scanTreeForNodesModules(module);
@@ -676,18 +836,26 @@ module.exports = {
     load:load,
     clear: registry.clear,
     registerType: registry.registerNodeConstructor,
+
     get: registry.getNodeConstructor,
     getNodeInfo: registry.getNodeInfo,
-    getNodeModuleInfo: registry.getModuleInfo,
     getNodeList: registry.getNodeList,
+
+    getNodeModuleInfo: registry.getNodeModuleInfo,
+
+    getModuleInfo: registry.getModuleInfo,
+    getModuleList: registry.getModuleList,
+    getModuleVersion: registry.getModuleVersion,
+
     getNodeConfigs: registry.getAllNodeConfigs,
     getNodeConfig: registry.getNodeConfig,
+
     addNode: addNode,
     removeNode: registry.removeNode,
     enableNode: registry.enableNodeSet,
     disableNode: registry.disableNodeSet,
-    
+
     addModule: addModule,
     removeModule: registry.removeModule,
-    cleanNodeList: registry.cleanNodeList
-}
+    cleanModuleList: registry.cleanModuleList
+};

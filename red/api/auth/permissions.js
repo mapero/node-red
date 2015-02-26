@@ -1,5 +1,5 @@
 /**
- * Copyright 2014 IBM Corp.
+ * Copyright 2015 IBM Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,3 +13,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  **/
+
+var util = require('util');
+
+var readRE = /^((.+)\.)?read$/
+var writeRE = /^((.+)\.)?write$/
+
+function hasPermission(user,permission) {
+    if (!user.permissions) {
+        return false;
+    }
+    if (user.permissions == "*") {
+        return true;
+    }
+    if (user.permissions == "read") {
+        return readRE.test(permission);
+    }
+}
+
+module.exports = {
+    hasPermission: hasPermission,
+}

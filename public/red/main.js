@@ -1,5 +1,5 @@
 /**
- * Copyright 2013 IBM Corp.
+ * Copyright 2013, 2015 IBM Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,33 +15,13 @@
  **/
 var RED = (function() {
 
-    function hideDropTarget() {
-        $("#dropTarget").hide();
-        RED.keyboard.remove(/* ESCAPE */ 27);
+    var deploymentTypes = {
+        "full":{img:"images/deploy-full-o.png"},
+        "nodes":{img:"images/deploy-nodes-o.png"},
+        "flows":{img:"images/deploy-flows-o.png"}
     }
-
-    $('#chart').on("dragenter",function(event) {
-        if ($.inArray("text/plain",event.originalEvent.dataTransfer.types) != -1) {
-            $("#dropTarget").css({display:'table'});
-            RED.keyboard.add(/* ESCAPE */ 27,hideDropTarget);
-        }
-    });
-
-    $('#dropTarget').on("dragover",function(event) {
-        if ($.inArray("text/plain",event.originalEvent.dataTransfer.types) != -1) {
-            event.preventDefault();
-        }
-    })
-    .on("dragleave",function(event) {
-        hideDropTarget();
-    })
-    .on("drop",function(event) {
-        var data = event.originalEvent.dataTransfer.getData("text/plain");
-        hideDropTarget();
-        RED.view.importNodes(data);
-        event.preventDefault();
-    });
-
+    var deploymentType = "full";
+    
     function save(force) {
         if (RED.view.dirty()) {
             //$("#debug-tab-clear").click();  // uncomment this to auto clear debug on deploy
@@ -82,7 +62,10 @@ var RED = (function() {
                 url:"flows",
                 type: "POST",
                 data: JSON.stringify(nns),
-                contentType: "application/json; charset=utf-8"
+                contentType: "application/json; charset=utf-8",
+                headers: {
+                    "Node-RED-Deployment-Type":deploymentType
+                }
             }).done(function(data,textStatus,xhr) {
                 RED.notify("Successfully deployed","success");
                 RED.nodes.eachNode(function(node) {
@@ -279,48 +262,116 @@ var RED = (function() {
 
         dialog.modal();
     }
+    
+    function changeDeploymentType(type) {
+        deploymentType = type;
+        $("#btn-deploy img").attr("src",deploymentTypes[type].img);
+    }
 
-    $(function() {
+    function loadEditor() {
         RED.menu.init({id:"btn-sidemenu",
             options: [
-                {id:"btn-sidebar",icon:"fa fa-columns",label:"Sidebar",toggle:true,onselect:RED.sidebar.toggleSidebar, selected: true},
+                {id:"btn-sidebar",label:"Sidebar",toggle:true,onselect:RED.sidebar.toggleSidebar, selected: true},
+                {id:"btn-node-status",label:"Display node status",toggle:true,onselect:toggleStatus, selected: true},
                 null,
-                {id:"btn-node-status",icon:"fa fa-info",label:"Node Status",toggle:true,onselect:toggleStatus},
-                null,
-                {id:"btn-import-menu",icon:"fa fa-sign-in",label:"Import...",options:[
-                    {id:"btn-import-clipboard",icon:"fa fa-clipboard",label:"Clipboard...",onselect:RED.view.showImportNodesDialog},
-                    {id:"btn-import-library",icon:"fa fa-book",label:"Library",options:[]}
+                {id:"btn-import-menu",label:"Import",options:[
+                    {id:"btn-import-clipboard",label:"Clipboard",onselect:RED.view.showImportNodesDialog},
+                    {id:"btn-import-library",label:"Library",options:[]}
                 ]},
-                {id:"btn-export-menu",icon:"fa fa-sign-out",label:"Export...",disabled:true,options:[
-                    {id:"btn-export-clipboard",icon:"fa fa-clipboard",label:"Clipboard...",disabled:true,onselect:RED.view.showExportNodesDialog},
-                    {id:"btn-export-library",icon:"fa fa-book",label:"Library...",disabled:true,onselect:RED.view.showExportNodesLibraryDialog}
+                {id:"btn-export-menu",label:"Export",disabled:true,options:[
+                    {id:"btn-export-clipboard",label:"Clipboard",disabled:true,onselect:RED.view.showExportNodesDialog},
+                    {id:"btn-export-library",label:"Library",disabled:true,onselect:RED.view.showExportNodesLibraryDialog}
                 ]},
                 null,
-                {id:"btn-config-nodes",icon:"fa fa-th-list",label:"Configuration nodes...",onselect:RED.sidebar.config.show},
+                {id:"btn-config-nodes",label:"Configuration nodes",onselect:RED.sidebar.config.show},
                 null,
-                {id:"btn-create-subflow",icon:"fa fa-share-alt",label:"Create subflow",onselect:RED.view.createSubflow},
-                {id:"btn-convert-subflow",icon:"fa fa-share-alt",label:"Convert to subflow",disabled:true,onselect:RED.view.convertToSubflow},
+                {id:"btn-subflow-menu",label:"Subflows", options: [
+                    {id:"btn-create-subflow",label:"Create subflow",onselect:RED.view.createSubflow},
+                    {id:"btn-convert-subflow",label:"Selection to subflow",disabled:true,onselect:RED.view.convertToSubflow},
+                ]},
                 null,
-                {id:"btn-workspace-menu",icon:"fa fa-th-large",label:"Workspaces",options:[
-                    {id:"btn-workspace-add",icon:"fa fa-plus",label:"Add"},
-                    {id:"btn-workspace-edit",icon:"fa fa-pencil",label:"Rename"},
-                    {id:"btn-workspace-delete",icon:"fa fa-minus",label:"Delete"},
+                {id:"btn-workspace-menu",label:"Workspaces",options:[
+                    {id:"btn-workspace-add",label:"Add"},
+                    {id:"btn-workspace-edit",label:"Rename"},
+                    {id:"btn-workspace-delete",label:"Delete"},
                     null
                 ]},
                 null,
-                {id:"btn-keyboard-shortcuts",icon:"fa fa-keyboard-o",label:"Keyboard Shortcuts",onselect:showHelp},
-                {id:"btn-help",icon:"fa fa-question",label:"Help...", href:"http://nodered.org/docs"}
+                {id:"btn-keyboard-shortcuts",label:"Keyboard Shortcuts",onselect:showHelp},
+                {id:"btn-help",label:"Node-RED Website", href:"http://nodered.org/docs"}
             ]
         });
-
+        
+        RED.menu.init({id:"btn-deploy-options",
+            options: [
+                {id:"btn-deploy-full",toggle:"deploy-type",icon:"images/deploy-full.png",label:"Full",sublabel:"Deploys everything in the workspace",onselect:function(s) { if(s){changeDeploymentType("full")}}},
+                {id:"btn-deploy-flow",toggle:"deploy-type",icon:"images/deploy-flows.png",label:"Modified Flows",sublabel:"Only deploys flows that contain changed nodes", onselect:function(s) {if(s){changeDeploymentType("flows")}}},
+                {id:"btn-deploy-node",toggle:"deploy-type",icon:"images/deploy-nodes.png",label:"Modified Nodes",sublabel:"Only deploys nodes that have changed",onselect:function(s) { if(s){changeDeploymentType("nodes")}}}
+            ]
+        });
+        
+        if (RED.settings.user) {
+            RED.menu.init({id:"btn-usermenu",
+                options: []
+            });
+            
+            var updateUserMenu = function() {
+                $("#btn-usermenu-submenu li").remove();
+                if (RED.settings.user.anonymous) {
+                    RED.menu.addItem("btn-usermenu",{
+                        id:"btn-login",
+                        label:"Login",
+                        onselect: function() {
+                            RED.user.login({cancelable:true},function() {
+                                RED.settings.load(function() {
+                                    RED.notify("Logged in as "+RED.settings.user.username,"success");
+                                    updateUserMenu();
+                                });
+                            });
+                        }
+                    });
+                } else {
+                    RED.menu.addItem("btn-usermenu",{
+                        id:"btn-username",
+                        label:"<b>"+RED.settings.user.username+"</b>"
+                    });
+                    RED.menu.addItem("btn-usermenu",{
+                        id:"btn-logout",
+                        label:"Logout",
+                        onselect: function() {
+                            RED.user.logout();
+                        }
+                    });
+                }
+                    
+            }
+            updateUserMenu();
+        } else {
+            $("#btn-usermenu").parent().hide();
+        }
+    
+        $("#main-container").show();
+        $(".header-toolbar").show();
+        
+        RED.library.init();
+        RED.palette.init();
+        RED.sidebar.init();
+        RED.view.init();
+        
         RED.keyboard.add(/* ? */ 191,{shift:true},function(){showHelp();d3.event.preventDefault();});
-        loadSettings();
         RED.comms.connect();
+        loadNodeList();
+    }
+
+    $(function() {
+            
+        if ((window.location.hostname !== "localhost") && (window.location.hostname !== "127.0.0.1")) {
+            document.title = "Node-RED : "+window.location.hostname;
+        }
+        
+        RED.settings.init(loadEditor);
     });
 
-    if ((window.location.hostname !== "localhost") && (window.location.hostname !== "127.0.0.1")) {
-        document.title = "Node-RED : "+window.location.hostname;
-    }
 
     return {
     };
